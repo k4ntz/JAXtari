@@ -6,7 +6,7 @@ import sys
 
 from jaxtari.renderers import JAXGameRenderer
 from jaxtari.rendering import jax_rendering_utils as render_utils
-from jaxtari.games.montezuma_revenge.core import MontezumaRevengeConstants, MontezumaRevengeState
+from jaxtari.games.montezuma_revenge.core import MontezumaRevengeConstants, MontezumaRevengeState, enemy_bounce_offsets, rope_widths
 from jaxtari.games.montezuma_revenge.rooms import load_room
 from jaxtari.games.mods.montezuma_revenge.custom_rooms import load_custom_room
 
@@ -115,6 +115,12 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
             self.COLOR_TO_ID,
             self.FLIP_OFFSETS
         ) = self.jr.load_and_setup_assets(final_asset_config, sprite_path)
+
+        # ROM D02A walking bitmap is one row above the retained asset.
+        walk = self.SHAPE_MASKS["player"][2]
+        self.ORIGINAL_WALK_1 = walk
+        corrected_walk = jnp.concatenate((walk[1:], jnp.full_like(walk[:1], self.jr.TRANSPARENT_ID)))
+        self.SHAPE_MASKS["player"] = self.SHAPE_MASKS["player"].at[2].set(corrected_walk)
 
         # Accurate ladder color for Difficulty 1, Layer 1
         self.LADDER_COLOR = jnp.array([66, 158, 130], dtype=jnp.uint8)
@@ -373,6 +379,20 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
 
         raster = jax.lax.cond(room_id == 24, lambda r: stamp_room(r, self.SHAPE_MASKS["room_bg_bonus"]), lambda r: r, raster)
 
+        # Measured top-floor band in rooms5/13/20 starts at screen93.
+        # Move its visible surface consistently with the collision line.
+        raster = jax.lax.cond(
+            jnp.isin(room_id, jnp.array([3, 5, 10, 11, 13, 14, 18, 20, 21, 22, 24, 25, 26, 28, 30, 32])),
+            lambda r: r.at[room_y + 46:room_y + 51, 4:156].set(r[room_y + 47:room_y + 52, 4:156]),
+            lambda r: r, raster)
+
+        # Match the static pit ledges to the measured dynamic-floor bounds.
+        pit_band = jnp.where(jnp.logical_or(jnp.arange(160) < 36, jnp.arange(160) >= 124),
+                             self.LEVEL2_PLATFORM_ID, self.jr.TRANSPARENT_ID)
+        raster = jax.lax.cond(jnp.isin(room_id, jnp.array([19, 27, 29, 31])),
+            lambda r: r.at[room_y + 46:room_y + 52, :].set(jnp.broadcast_to(pit_band, (6, 160))),
+            lambda r: r, raster)
+
         left_wall_color = jnp.where(room_id == 19, self.LADDER_ID,
                                     jnp.where(room_id == 30, self.ORANGE_LADDER_ID,
                                               jnp.where(room_id == 17, self.LEVEL2_PLATFORM_ID, 1)))
@@ -424,8 +444,17 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
                 ladder_width = 16
                 rail_pos = jnp.array([[x, top], [x + ladder_width - 4, top]])
                 rail_size = jnp.array([[4, bottom - top], [4, bottom - top]])
-                rung_pos = jnp.array([[x, top + 4]])
-                rung_size = jnp.array([[ladder_width, bottom - top - 4]])
+                # The start-room rails and rungs have different scanline phases.
+                # ALE places the first rungs at y=101/144, leaving five empty
+                # rows below the platform, and no rung at the side-ladder feet.
+                rung_top = top + jnp.where(room_id == 4, 6, 4)
+                rung_bottom = jnp.where(
+                    jnp.logical_and(room_id == 4, room_state.ladders_bottom[i] == 130),
+                    bottom - 3,
+                    bottom,
+                )
+                rung_pos = jnp.array([[x, rung_top]])
+                rung_size = jnp.array([[ladder_width, rung_bottom - rung_top]])
 
                 def draw_l1(r_in):
                     r_in = self.jr.draw_rects(r_in, rail_pos, rail_size, self.LADDER_ID)
@@ -483,7 +512,8 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
 
             def _draw(raster_in):
                 rail_pos = jnp.array([[x, top]])
-                rail_size = jnp.array([[1, bottom - top + 1]])
+                # ALE's start-room rope ends just above the conveyor row.
+                rail_size = jnp.array([[rope_widths(room_state)[i], bottom - top + jnp.where(room_id == 4, 0, 1)]])
                 return self.jr.draw_rects(raster_in, rail_pos, rail_size, self.DOOR_ID)
 
             return jax.lax.cond(active == 1, _draw, lambda r_in: r_in, r)
@@ -554,7 +584,8 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
 
         def _draw_lasers(raster):
             # Draw Lasers - vectorized to draw all lasers at once
-            laser_active_now = jnp.logical_and(jnp.greater_equal(state.laser_cycle, 0), jnp.less(state.laser_cycle, 92))
+            laser_active_now = jnp.logical_or(state.level == 2,
+                jnp.logical_and(jnp.greater_equal(state.laser_cycle, 0), jnp.less(state.laser_cycle, 92)))
             laser_offset = jnp.mod(state.laser_cycle, 4)
             
             # Compute stripe j values (40 pixels high, 4-pixel spacing with offset)
@@ -686,9 +717,12 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         )
         
         def render_conveyor_body(i, raster):
+            # The conveyor graphic begins one row below its collision surface
+            # in the start room; otherwise it obscures the ladder's last row.
+            conveyor_y = state.conveyors_y[i] + 47
             return jax.lax.cond(
                 state.conveyors_active[i] == 1,
-                lambda r: self.jr.render_at(r, state.conveyors_x[i], state.conveyors_y[i] + 47, conveyor_mask, flip_vertical=anim_idx),
+                lambda r: self.jr.render_at(r, state.conveyors_x[i], conveyor_y, conveyor_mask, flip_vertical=anim_idx),
                 lambda r: r,
                 raster
             )
@@ -737,9 +771,12 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         def render_door(i, raster):
             mask = self.SHAPE_MASKS["door"]
             is_active = jnp.logical_and(state.doors_active[i] == 1, jnp.logical_not(is_rendered_dark))
+            # The start-room door bars occupy the inner half of each opening.
+            door_inset = jnp.where(state.doors_x[i] < self.consts.WIDTH // 2, 4, -4)
+            door_x = state.doors_x[i] + jnp.where(state.room_id == 4, door_inset, 0)
             return jax.lax.cond(
                 is_active,
-                lambda r: self.jr.render_at(r, state.doors_x[i], state.doors_y[i] + 47, mask),
+                lambda r: self.jr.render_at(r, door_x, state.doors_y[i] + 47, mask),
                 lambda r: r,
                 raster
             )
@@ -748,7 +785,20 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         # Draw Enemies
         def render_enemy(i, raster):
             anim_idx = jax.lax.select(state.enemies_bouncing[i] == 1, 0, jnp.mod(state.enemies_x[i], 16))
-            bounce_offset = jax.lax.select(state.enemies_bouncing[i] == 1, self.consts.BOUNCE_OFFSETS[jnp.mod(state.frame_count // 4, 22)], 0)
+            # Native ALE room-4 traces rotate the left-moving skull by one
+            # sprite every two horizontal pixels (x=90/89: 8, x=88/87: 7).
+            # Keep the other rooms and bouncing animations on their existing
+            # path until their sprite phases have been measured separately.
+            start_room_skull = jnp.logical_and(
+                state.room_id == 4,
+                jnp.logical_and(state.enemies_direction[i] == -1, state.enemies_bouncing[i] == 0),
+            )
+            anim_idx = jnp.where(
+                start_room_skull,
+                jnp.mod(jnp.floor_divide(state.enemies_x[i] + 1, 2) + 11, 16),
+                anim_idx,
+            )
+            bounce_offset = enemy_bounce_offsets(state, self.consts)[i]
 
             spider_anim = jnp.mod(jnp.floor_divide(state.frame_count, 7), 2)
             spider_mask = jax.lax.cond(
@@ -767,7 +817,15 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
                 None
             )
             
-            skull_mask = self.SHAPE_MASKS["skull"][anim_idx]
+            skull_mask = self.SHAPE_MASKS["skull"][jnp.where(state.enemies_bouncing[i] == 1, 0, anim_idx)]
+            skull_mask = jnp.where(jnp.logical_and(state.level == 2, state.room_id == 3),
+                skull_mask.at[-1, :].set(self.jr.TRANSPARENT_ID), skull_mask)
+            native_rolling = jnp.logical_and(state.level == 2,
+                jnp.logical_and(i == 0, jnp.isin(state.room_id, jnp.array([4,12,27]))))
+            skull_mask = jnp.where(native_rolling,
+                self.SHAPE_MASKS["skull"][state.rolling_skull_phase], skull_mask)
+            skull_mask = jax.lax.cond(jnp.logical_and(native_rolling, state.native_rolling_direction < 0),
+                lambda: jnp.flip(skull_mask, axis=1), lambda: skull_mask)
             
             # Neutralize (gray out) enemies if amulet is active
             is_neutralized = state.amulet_time > 0
@@ -792,7 +850,7 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
                     r
                 )
             return jax.lax.cond(
-                state.enemies_active[i] == 1,
+                jnp.logical_and(state.enemies_active[i] == 1, state.transition_pending == 0),
                 _render_active,
                 lambda r: r,
                 raster
@@ -803,9 +861,13 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         is_walking = jnp.logical_and(state.player_vx != 0, jnp.logical_and(state.is_climbing == 0, jnp.logical_and(state.is_jumping == 0, state.is_falling == 0)))
         is_laddering = jnp.logical_and(state.is_climbing == 1, state.last_rope == -1)
         is_roping = jnp.logical_and(state.is_climbing == 1, state.last_rope != -1)
-        is_in_air = jnp.logical_or(state.is_jumping == 1, state.is_falling == 1)
+        # FIRE first prepares the jump without changing the standing pose.
+        is_in_air = jnp.logical_or(
+            jnp.logical_and(state.is_jumping == 1, state.jump_counter > 0),
+            state.is_falling == 1,
+        )
 
-        walk_anim = jnp.mod(jnp.floor_divide(state.frame_count, 4), 2)
+        walk_anim = jnp.mod(jnp.floor_divide(state.native_frame_count + 67, 4), 2)
         ladder_anim = jnp.mod(jnp.floor_divide(state.player_y, 4), 2)
         rope_anim = jnp.mod(jnp.floor_divide(state.player_y, 4), 2)
 
@@ -833,7 +895,20 @@ class MontezumaRevengeRenderer(JAXGameRenderer):
         )
         
         player_mask = self.SHAPE_MASKS["player"][player_sprite_idx]
-        raster = self.jr.render_at(raster, state.player_x, state.player_y + 47, player_mask, flip_horizontal=flip_player)
+        # Native climb pointers describe the pose rendered before this tick's
+        # movement. Keep its fixed/clocked bitmap, facing and ladder scanlines.
+        climb_render = jnp.logical_and(state.level == 2, jnp.logical_and(~is_dying,
+            jnp.logical_or(state.is_climbing == 1,
+                jnp.logical_and(state.collision_player_pose >= 3, state.collision_player_pose <= 6))))
+        retained_mask = self.SHAPE_MASKS["player"][state.collision_player_pose]
+        player_mask = jnp.where(climb_render, retained_mask, player_mask)
+        retained_flip = jnp.where(jnp.isin(state.collision_player_pose, jnp.array([1,2,7])),
+            state.collision_player_dir == 1, state.collision_player_dir == -1)
+        flip_player = jnp.where(climb_render, retained_flip, flip_player)
+        render_x = jnp.where(climb_render, state.collision_player_x, state.player_x)
+        climb_offset = jnp.isin(state.collision_player_pose, jnp.array([3,4])).astype(jnp.int32) * 2
+        render_y = jnp.where(climb_render, state.collision_player_y + climb_offset, state.player_y)
+        raster = self.jr.render_at(raster, render_x, render_y + 47, player_mask, flip_horizontal=flip_player)
 
         # Render Score
         score = state.score
