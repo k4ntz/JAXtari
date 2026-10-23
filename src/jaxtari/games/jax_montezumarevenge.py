@@ -208,6 +208,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             player_vx=jnp.array(0, dtype=jnp.int32),
             player_vy=jnp.array(0, dtype=jnp.int32),
             player_dir=jnp.array(-1, dtype=jnp.int32),
+            native_player_reflected=jnp.bool_(True),
             entry_x=jnp.array(self.consts.INITIAL_PLAYER_X, dtype=jnp.int32),
             entry_y=jnp.array(self.consts.INITIAL_PLAYER_Y, dtype=jnp.int32),
             entry_is_climbing=jnp.array(0, dtype=jnp.int32),
@@ -420,6 +421,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         def relocate():
             held = state.replace(player_x=state.transition_x, player_y=state.transition_y,
                 native_mode=jnp.int32(4), native_support_phase=jnp.int32(NativeSupportPhase.NORMAL),
+                native_player_reflected=(state.transition_pending == 1) & (state.transition_x >= 148),
                 transition_pending=jnp.int32(0), room5_skull_spawn_pending=jnp.bool_(False),
                 frame_count=state.frame_count + 1,
                 is_jumping=jnp.where(state.transition_pending == 1, 0, state.is_jumping),
@@ -1337,7 +1339,11 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         # Atari reads the previous rendered frame's collision result.
         # The key's transparent outline cannot collide like a solid6x8 box.
         airborne = jnp.logical_or(new_is_jumping == 1, new_is_falling == 1)
-        retained_pose = jnp.logical_and(jnp.logical_and(state.level == 1, state.room_id != 12), state.collision_player_x >= 0)
+        # The room0 lower kernel retains a prior player anchor. Ordinary
+        # native enemy kernels draw at the current pre-movement position.
+        retained_pose = jnp.logical_and(jnp.logical_and(state.level == 1,
+            jnp.where(self.consts.CUSTOM_ROOMS, state.room_id != 12, state.room_id == 3)),
+            state.collision_player_x >= 0)
         # Room0's lower-floor kernel retains the preceding pose for item
         # contact. The upper-floor kernels test the current native position.
         retained_item_pose = jnp.logical_or(jnp.logical_and(retained_pose, state.room_id == 3),
@@ -1647,19 +1653,31 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             climb_pose, player_idx)
         player_idx = jnp.where(airborne, 7, player_idx)
         player_idx = jnp.where(retained_pose, state.collision_player_pose, player_idx)
+        # The visible kernel consumes the graphics pointer before updating
+        # it from B5. Releasing walk therefore displays one final walk
+        # bitmap; velocity alone changes to the standing mask a tick early.
+        stopped_walk = jnp.logical_and(not self.consts.CUSTOM_ROOMS,
+            jnp.logical_and(~walking & ~airborne & (state.is_climbing == 0),
+                jnp.isin(state.render_pointer_pose, jnp.array([1, 2]))))
+        player_idx = jnp.where(stopped_walk, state.render_pointer_pose, player_idx)
         player_pixels = self._player_collision_masks[player_idx]
-        player_pixels = jnp.where(jnp.logical_and(jnp.logical_or(state.room_id == 20, state.level == 2), player_idx == 2),
+        player_pixels = jnp.where(jnp.logical_and(jnp.logical_or(not self.consts.CUSTOM_ROOMS,
+            jnp.logical_or(state.room_id == 20, state.level == 2)), player_idx == 2),
             self._original_walk_1_collision_mask, player_pixels)
-        flip_pixels = jnp.where(jnp.logical_or(walking, airborne), state.player_dir == 1, state.player_dir == -1)
+        flip_pixels = jnp.where(walking | stopped_walk | airborne, state.player_dir == 1, state.player_dir == -1)
         retained_direction = jnp.where(retained_pose, state.collision_player_dir, state.player_dir)
         flip_pixels = jnp.where(jnp.logical_and(retained_pose, jnp.isin(player_idx, jnp.array([1,2,7]))), retained_direction == 1,
             jnp.where(retained_pose, retained_direction == -1, flip_pixels))
-        # Native ladder pointers already contain their alternating reflection;
-        # player_dir is not the TIA reflection bit for this dispatch.
-        flip_pixels = jnp.where(native_ladder_contact, False, flip_pixels)
+        # The visible kernel writes B4 to REFP0. Climbing preserves its
+        # facing bit even while the graphics pointer alternates.
+        flip_pixels = jnp.where(native_ladder_contact, state.native_player_reflected, flip_pixels)
         player_pixels = jax.lax.cond(flip_pixels, lambda: jnp.flip(player_pixels, axis=1), lambda: player_pixels)
-        enemy_animation = jnp.where(state.level == 2,
-            (state.native_frame_count + 66) // 8, state.frame_count // 7) % 2
+        # FCD7 selects the two native bitmaps on RAM0 bit3 after the
+        # global clock tick. This clock also advances during frozen poses.
+        enemy_animation = jnp.where(not self.consts.CUSTOM_ROOMS,
+            (state.native_frame_count + 68) // 8,
+            jnp.where(state.level == 2,
+                (state.native_frame_count + 66) // 8, state.frame_count // 7)) % 2
         snake_pixels = self._snake_collision_masks[enemy_animation]
         snake_pixels = jnp.where((state.enemies_direction == -1)[:, None, None],
             jnp.flip(snake_pixels, axis=1)[None, :, :], snake_pixels[None, :, :])
@@ -1674,7 +1692,9 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             jnp.logical_and(inside_snake, snake_contact_pixels)), axis=(1, 2))
         spider_pixels = jax.lax.cond(enemy_animation == 1,
             lambda: jnp.flip(self._spider_collision_mask, axis=1), lambda: self._spider_collision_mask)
-        spider_contact_x = jnp.where(state.level == 2, new_enemies_x, state.enemies_x)
+        # B949 moves the native spider before B47F reads the contact latch.
+        spider_contact_x = jnp.where(jnp.logical_or(not self.consts.CUSTOM_ROOMS,
+            state.level == 2), new_enemies_x, state.enemies_x)
         spider_x = contact_x + sx[None, :, :] - spider_contact_x[:, None, None]
         spider_y = contact_y + sy[None, :, :] - state.enemies_y[:, None, None]
         inside_spider = jnp.logical_and(jnp.logical_and(spider_x >= 0, spider_x < spider_pixels.shape[1]),
@@ -1734,12 +1754,17 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             jnp.logical_and(rolling_room, jnp.arange(self.consts.MAX_ENEMIES_PER_ROOM) == 0)),
             rolling_contact, enemy_contact)
         this_hit_enemy = jnp.logical_and(state.enemies_active == 1, enemy_contact)
+        # Amulet immunity suppresses the effect, not the native contact
+        # dispatch itself. B510..B530 still compares the enemy type.
+        amulet_enemy_contact = jnp.logical_and(is_active & (state.native_mode == 4),
+            jnp.logical_and(is_amulet_active, jnp.any(this_hit_enemy)))
         
         # Neutralize enemy collision if amulet is active
         this_hit_enemy = jnp.logical_and(is_active, jnp.logical_and(this_hit_enemy, jnp.logical_not(is_amulet_active)))
         # Mode7 falls bypass the standing handler's TIA enemy contact read.
         this_hit_enemy = jnp.logical_and(this_hit_enemy,
-            jnp.logical_or(state.level < 2, state.native_mode == 4))
+            jnp.logical_or(jnp.logical_and(self.consts.CUSTOM_ROOMS, state.level < 2),
+                state.native_mode == 4))
 
         has_sword = current_inventory[1] > 0
         # Native swords kill skulls and spiders; snakes remain lethal.
@@ -1749,18 +1774,18 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         actually_killed_mask = jnp.logical_and(kill_enemy_mask, kill_order <= current_inventory[1])
         
         died_from_enemy = jnp.any(jnp.logical_and(this_hit_enemy, jnp.logical_not(actually_killed_mask)))
-        # Sword kills consume the enemy; fatal-contact cleanup is room-specific.
+        # Sword kills consume the enemy immediately.
         new_enemies_active = jnp.where(actually_killed_mask, 0, state.enemies_active)
         # The rolling skull's room bit is cleared on fatal contact as well.
         new_enemies_active = jnp.where(jnp.logical_and(jnp.logical_or(state.room_id == 4,
             jnp.logical_and(state.level == 2, rolling_room)),
             jnp.logical_and(died_from_enemy, this_hit_enemy)), 0, new_enemies_active)
-        # Room20 snakes stay visible throughout death and respawn, then
-        # the touched snake disappears on the first resumed native frame.
-        # This is death cleanup, with no sword use or kill reward.
-        snake_cleanup_room = jnp.logical_or(state.room_id == 20,
-            jnp.logical_and(not self.consts.CUSTOM_ROOMS, state.room_id == 18))
-        cleanup_enemy = jnp.logical_and(snake_cleanup_room, jnp.logical_and(
+        # B48C..B559 clears the touched native entity's history bit on
+        # fatal contact. Its displayed slot survives the death hold, then
+        # disappears when room metadata is resumed. This applies to every
+        # native room, including the second-temple snake pair in room13.
+        delayed_enemy_cleanup = jnp.logical_or(not self.consts.CUSTOM_ROOMS, state.room_id == 20)
+        cleanup_enemy = jnp.logical_and(delayed_enemy_cleanup, jnp.logical_and(
             state.death_timer == 0, state.respawn_enemy_idx >= 0))
         cleanup_mask = jnp.logical_and(cleanup_enemy,
             jnp.arange(self.consts.MAX_ENEMIES_PER_ROOM) == state.respawn_enemy_idx)
@@ -1969,6 +1994,16 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         # Its next contact still follows the standing path, including carry.
         carry = jnp.where(jnp.logical_and(jnp.isin(state.native_mode, jnp.array([7, 8])),
             state.is_falling == 1), fall_carry, carry)
+        # The closed-exit probe precedes B47F's contact dispatch. Contact
+        # type comparisons, pickup and fatal cleanup may replace its carry.
+        closed_side_exit = jnp.logical_and(not self.consts.CUSTOM_ROOMS,
+            jnp.logical_and(~is_bonus_room,
+                jnp.logical_and(is_active, jnp.logical_or(
+                    jnp.logical_and(jnp.logical_and(dx > 0, raw_new_x > 148), (exits & 8) == 0),
+                    jnp.logical_and(jnp.logical_and(dx < 0, raw_new_x < 4), (exits & 4) == 0)))))
+        carry = jnp.where(closed_side_exit, 0, carry)
+        carry = jnp.where(jnp.logical_and(not self.consts.CUSTOM_ROOMS,
+            amulet_enemy_contact), 1, carry)
         pickup_carry = jnp.where(jnp.logical_or(amulet_collected, torch_collected), 1,
             jnp.where(keys_collected > 0, state.inventory[0] == 0, 0))
         carry = jnp.where(any_item_pickup, pickup_carry, carry)
@@ -1980,14 +2015,6 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             jnp.logical_or(died_from_enemy, died_from_laser)),
             jnp.where(died_from_laser, 0, native_room % 2), 1)
         carry = jnp.where(start_death, jnp.where(died_from_pit, 0, contact_death_carry), carry)
-        # A closed side exit returns with carry clear even though the
-        # native room's default standing path would leave it set.
-        closed_side_exit = jnp.logical_and(not self.consts.CUSTOM_ROOMS,
-            jnp.logical_and(~is_bonus_room,
-                jnp.logical_and(is_active, jnp.logical_or(
-                    jnp.logical_and(jnp.logical_and(dx > 0, raw_new_x > 148), (exits & 8) == 0),
-                    jnp.logical_and(jnp.logical_and(dx < 0, raw_new_x < 4), (exits & 4) == 0)))))
-        carry = jnp.where(closed_side_exit, 0, carry)
         carry = jnp.where(transition_any, jnp.logical_or(transition_left, transition_up), carry)
         original_duplicates = LEVEL_CONTENTS[jnp.minimum(state.level, 2), native_room_index, 3]
         history_weights = jnp.array([1,0,4], dtype=jnp.int32).at[1].set(
@@ -2050,7 +2077,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             score=new_score,
             respawn_enemy_idx=jnp.where(
                 jnp.logical_and(start_death, jnp.logical_and(died_from_enemy,
-                    jnp.logical_or(snake_cleanup_room,
+                    jnp.logical_or(delayed_enemy_cleanup,
                         jnp.logical_and(state.level == 2, ~jnp.isin(state.room_id, jnp.array([4,12])))))),
                 jnp.argmax(this_hit_enemy.astype(jnp.int32)),
                 jnp.where(cleanup_enemy, -1, state.respawn_enemy_idx)),
@@ -2076,6 +2103,11 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             native_climb_moving=jnp.where(is_active,
                 jnp.logical_and(final_is_climbing == 1, jnp.logical_or(ladder_up, ladder_down)),
                 state.native_climb_moving),
+            native_player_reflected=jnp.where(respawn_now,
+                (state.entry_is_climbing == 0) & ((state.entry_x == 76) | (state.entry_x >= 148)),
+                jnp.where(is_active & (state.native_mode == 4) &
+                    (state.is_jumping == 0) & ((state.is_climbing == 0) | is_jumping_off_rope) &
+                    (is_left | is_right), is_left, state.native_player_reflected)),
             native_walk_pose=jnp.where(is_active,
                 jnp.logical_and(final_is_climbing == 0,
                     jnp.logical_and(final_is_jumping == 0, jnp.logical_and(final_is_falling == 0,

@@ -197,6 +197,8 @@ class MontezumaRevengeState:
     native_fall_ticks: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
     # RAM53 selects a fixed hanging pose or a globally clocked climb cycle.
     native_climb_moving: jnp.ndarray = False
+    # RAM B4 bit3 survives ladder poses independently of movement direction.
+    native_player_reflected: jnp.ndarray = struct.field(default_factory=lambda: jnp.bool_(False))
     native_walk_pose: jnp.ndarray = False
     game_over_pending: jnp.ndarray = False
     # First-key pickup bookkeeping; elapsed native ticks include frozen poses.
