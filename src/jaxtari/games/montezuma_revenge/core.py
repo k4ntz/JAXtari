@@ -81,6 +81,7 @@ class NativeSupportPhase(IntEnum):
     NORMAL = 0
     PENDING_ANCHOR = 1
     UNANCHORED_CLIMB = 2
+    LADDER_ANCHOR = 3
 
 
 @struct.dataclass
@@ -189,8 +190,11 @@ class MontezumaRevengeState:
     # RAM52 bit2: retained drift until native support/rope/ladder cleanup
     # or room relocation. Some landings retain it for a later floor collapse.
     native_jump_momentum: jnp.ndarray = False
-    # FC8E may end D6 before the standing anchor is restored (B398).
+    # FC8E may end D6 before anchor restoration; B19C also distinguishes
+    # a resting ladder anchor from ordinary standing at the same position.
     native_support_phase: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(NativeSupportPhase.NORMAL))
+    # RAM D8 counts falling dispatch ticks, not pixels or pose corrections.
+    native_fall_ticks: jnp.ndarray = struct.field(default_factory=lambda: jnp.int32(0))
     # RAM53 selects a fixed hanging pose or a globally clocked climb cycle.
     native_climb_moving: jnp.ndarray = False
     native_walk_pose: jnp.ndarray = False

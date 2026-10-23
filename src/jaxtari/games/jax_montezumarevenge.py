@@ -550,6 +550,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
 
     def _step_active(self, state: MontezumaRevengeState, action: int) -> Tuple[MontezumaRevengeObservation, MontezumaRevengeState, float, bool, MontezumaRevengeInfo]:
         unanchored_climb = state.native_support_phase == NativeSupportPhase.UNANCHORED_CLIMB
+        ladder_anchor = state.native_support_phase == NativeSupportPhase.LADDER_ANCHOR
         previous_x, previous_y = state.player_x, state.player_y
         is_active = state.death_timer == 0
         room_idx = get_room_idx(state.room_id)
@@ -628,10 +629,13 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         # Standing dispatch samples FIRE before attempting an upward entry.
         # Neither ladder endpoint may cancel a jump already in progress.
         upward_jump_press = jnp.logical_and(ladder_up,
-            jnp.logical_and(is_fire, ~state.prev_is_fire))
+            jnp.logical_and(is_fire, jnp.logical_and(~state.prev_is_fire, ~ladder_anchor)))
         can_grab_ladder = jnp.logical_and(~is_airborne,
             jnp.logical_and(~upward_jump_press,
                 jnp.logical_or(get_on_top_ladder, get_on_bottom_ladder)))
+        # B398 first restores an unanchored climbing pose. It cannot also
+        # snap to a nearby real ladder during that same dispatch.
+        can_grab_ladder = can_grab_ladder & ~unanchored_climb
         ladder_bottom_bound = jnp.where(l_bottom >= 148, 170, l_bottom + 1)
         # At the pit-room endpoint, held DOWN starts a two-pixel fall on
         # the tick after y73 if the floor is absent (native ALE clone probe).
@@ -785,6 +789,13 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         current_x = jnp.where(is_climbing == 1, target_climb_x, state.player_x)
         current_x = jnp.where(rope_top_drop, target_climb_x, current_x)
         
+        def start_room_support(x, y):
+            # DB92's two ten-anchor holes (FFB9), and DBB0..DBD3's
+            # middle belt/bank intervals. These are shared by all temples.
+            upper = ~(((x >= 53) & (x < 63)) | ((x >= 88) & (x < 98)))
+            middle = (x < 33) | (x >= 119) | ((x >= 56) & (x < 100))
+            return jnp.where(y == 26, upper, middle)
+
         def check_platform_local(y, x):
             # Standing/landing contact uses the player's collision footprint.
             # A center-only probe misses a ledge reached by the leading foot,
@@ -804,6 +815,9 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             # falling dispatch; a broad sprite footprint would immediately
             # land again against the bank it just left.
             anchor = x - self.consts.PLAYER_WIDTH // 2
+            start_surface = (not self.consts.CUSTOM_ROOMS) & (state.room_id == 4) & (
+                ((y >= 46) & (y < 50)) | ((y >= 89) & (y < 93)))
+            contact = contact & (~start_surface | start_room_support(anchor, jnp.where(y < 50, 26, 69)))
             upper_surface = jnp.logical_and(not self.consts.CUSTOM_ROOMS,
                 jnp.logical_and(y >= 46, y < 50))
             rope_room = jnp.isin(state.room_id, jnp.array([17,23]))
@@ -832,6 +846,9 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             state.conveyors_active == 1,
             jnp.logical_and(player_feet_y == state.conveyors_y - 1, jnp.logical_and(player_mid_x >= state.conveyors_x - jnp.where(state.level == 2, 1, 2), player_mid_x < state.conveyors_x + 42))
         )
+        native_start_floor = (not self.consts.CUSTOM_ROOMS) & (state.room_id == 4) & jnp.isin(state.player_y, jnp.array([26, 69]))
+        native_belt_anchor = (current_x >= 56) & (current_x < 100)
+        is_on_conveyor_ground = is_on_conveyor_ground & (~native_start_floor | native_belt_anchor)
         on_ground = jnp.logical_or(on_ground, jnp.any(is_on_conveyor_ground))
 
         # Vectorized platform check
@@ -872,6 +889,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
                 jnp.logical_and(x >= right_gap, x < right_gap + 26))
         on_ground = jnp.where(native_rope_upper, rope_upper_support(current_x), on_ground)
         jump_on_ground = jnp.where(native_rope_upper, on_ground, jump_on_ground)
+        on_ground = jnp.where(native_start_floor, start_room_support(current_x, state.player_y), on_ground)
 
         dropout_collapse = jnp.logical_and(state.level == 2,
             jnp.logical_and((state.native_frame_count + 1 + 31) % 128 == 92,
@@ -905,6 +923,9 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
                 ),
             ),
         )
+        # B19C skips FIRE for both moving (0A) and resting (00) ladder
+        # poses, including the bottom anchor reached on the preceding tick.
+        start_jump_normal = jnp.logical_and(start_jump_normal, ~ladder_anchor)
         start_jump = jnp.logical_or(start_jump_normal, is_jumping_off_rope)
         new_player_dir = jnp.where(jnp.logical_and(state.level == 2,
             jnp.logical_and(state.is_climbing == 1, ~is_jumping_off_rope)),
@@ -1015,9 +1036,9 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
                 jnp.logical_and(state.is_climbing == 0,
                     jnp.logical_and(state.is_jumping == 0,
                         state.out_of_ladder_delay == self.consts.OUT_OF_LADDER_DELAY))))
-        native_support_loss = jnp.logical_and(jnp.logical_or(state.level == 2,
+        native_support_loss = jnp.logical_and(jnp.logical_or(native_start_floor, jnp.logical_or(state.level == 2,
             jnp.logical_or(state.room_id == 17,
-                jnp.logical_or(native_rope_upper, native_pit_upper))),
+                jnp.logical_or(native_rope_upper, native_pit_upper)))),
             jnp.logical_and(state.native_mode == 4, jnp.logical_and(~on_ground,
                 jnp.logical_and(state.player_x >= 4, jnp.logical_and(state.player_x <= 148,
                     jnp.logical_and(state.is_falling == 0, jnp.logical_and(state.is_jumping == 0,
@@ -1102,21 +1123,22 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         # reach the ledge; native ALE snaps the final two pixels on this tick.
         converted_fall = jnp.logical_and(state.is_falling == 1,
             jnp.logical_or(jnp.isin(state.room_id, jnp.array([12,17])),
-                jnp.logical_or(jnp.logical_and(state.level > 0, state.room_id == 4),
-                    jnp.logical_and(state.level == 2, state.room_id == 23))))
+                jnp.logical_or(jnp.logical_and(jnp.logical_or(state.level > 0, not self.consts.CUSTOM_ROOMS), state.room_id == 4),
+                    jnp.logical_and(jnp.logical_or(state.level == 2, not self.consts.CUSTOM_ROOMS), state.room_id == 23))))
         landing_reach = dy + jnp.where(jnp.logical_or(state.is_jumping == 1, converted_fall), 2, 0)
         is_hit_rm = jnp.logical_and(jnp.logical_not(is_near_top), jnp.logical_and(dy > 0, jnp.logical_and(landing_reach >= y_check_offsets, is_top_surface)))
         hit_floor_rm = jnp.logical_and(jnp.any(is_hit_rm), jnp.logical_not(rope_top_drop))
-        # Standing dispatch keeps a running jump permeable to the fixed
-        # shelves. The stair chamber also has a permanent middle shelf.
+        # Standing dispatch keeps a running jump permeable to fixed
+        # shelves, including side steps and the permanent middle shelf.
         fixed_shelf_y = y_checks[jnp.argmax(is_hit_rm.astype(jnp.int32))] - self.consts.PLAYER_HEIGHT
         hit_floor_rm = jnp.logical_and(hit_floor_rm, ~jnp.logical_and(
             jnp.isin(state.room_id, jnp.array([17,23])),
             jnp.logical_and(jnp.logical_or(new_is_jumping == 1,
                 jnp.logical_and(state.is_jumping == 1,
                     jnp.logical_and(fixed_shelf_y == 26, ~rope_upper_support(current_x)))),
-                jnp.logical_or(fixed_shelf_y == 26,
-                    jnp.logical_and(state.room_id == 17, fixed_shelf_y == 76)))))
+                jnp.logical_or(not self.consts.CUSTOM_ROOMS,
+                    jnp.logical_or(fixed_shelf_y == 26,
+                        jnp.logical_and(state.room_id == 17, fixed_shelf_y == 76))))))
         snapped_y_rm = jnp.where(hit_floor_rm, y_checks[jnp.argmax(is_hit_rm.astype(jnp.int32))] - self.consts.PLAYER_HEIGHT, new_y)
 
         # Conveyor hit floor
@@ -1128,6 +1150,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
                 jnp.logical_and(dy > 0, jnp.logical_and(crossed_c, jnp.logical_and(safe_x >= state.conveyors_x - jnp.where(state.level == 2, 1, 2), safe_x < state.conveyors_x + 42)))
             )
         )
+        is_hit_c = is_hit_c & (~((not self.consts.CUSTOM_ROOMS) & (state.room_id == 4)) | native_belt_anchor)
         # At a ladder-to-belt exit ALE changes from the climbing pose to
         # the standing anchor four pixels before the normal feet contact.
         # Restrict this conversion to a ladder ending at an active belt.
@@ -1157,11 +1180,16 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
                 jnp.logical_and(dy > 0, jnp.logical_and(crossed_p, platform_support_x))
             )
         )
+        # B1FE keeps the running jump in jump dispatch; the side steps
+        # cannot finalize it merely because the sprite crosses their top.
+        is_hit_p = is_hit_p & ~((not self.consts.CUSTOM_ROOMS) & (state.room_id == 17) & (new_is_jumping == 1))
         hit_floor_p = jnp.any(is_hit_p)
         snapped_y = jnp.where(hit_floor_p, state.platforms_y[jnp.argmax(is_hit_p.astype(jnp.int32))] - 1 - self.consts.PLAYER_HEIGHT + 1, snapped_y_c)
         hit_floor = jnp.logical_or(hit_floor_rm, jnp.logical_or(hit_floor_c, hit_floor_p))
 
         new_y = jnp.where(hit_floor, snapped_y, new_y)
+        native_ladder_anchor = (not self.consts.CUSTOM_ROOMS) & is_climbing_ladder & ladder_down & hit_floor_rm & (
+            jnp.abs(new_y + self.consts.PLAYER_HEIGHT - l_bottom[jnp.maximum(ladder_idx, 0)]) <= 1)
         dx = jnp.where(jnp.logical_and(jnp.logical_or(state.is_jumping == 1,
             jnp.logical_and(state.room_id == 12, state.is_falling == 1)), hit_floor), 0, dx)
 
@@ -1242,8 +1270,9 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         new_support = jnp.where(jnp.logical_and(pit, state.player_y == 26),
             jnp.logical_or(platform_active_now, jnp.logical_or(new_x < 33, new_x >= 120)), new_support)
         new_support = jnp.where(native_rope_upper, rope_upper_support(new_x), new_support)
+        new_support = jnp.where(native_start_floor, start_room_support(new_x, state.player_y), new_support)
         native_ledge_fall = jnp.logical_and(jnp.logical_and(
-            jnp.logical_or(state.level == 2, jnp.logical_or(native_rope_upper, native_pit_upper)),
+            jnp.logical_or(native_start_floor, jnp.logical_or(state.level == 2, jnp.logical_or(native_rope_upper, native_pit_upper))),
             jnp.logical_and(state.player_x >= 4, state.player_x <= 148)),
             jnp.logical_and(on_ground, jnp.logical_and(~new_support,
                 jnp.logical_and(dy == 0, jnp.logical_and(~start_jump,
@@ -1452,18 +1481,17 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         native_support_contact = jnp.logical_or(
             jnp.logical_and(state.room_id == 4,
                 jnp.logical_and(jnp.logical_and(new_y >= 65, new_y <= 74),
-                    jnp.logical_or(jnp.logical_and(new_x >= 56, new_x < 100),
-                        jnp.logical_or(new_x < 33, new_x >= 119)))),
+                    start_room_support(new_x, 69))),
             jnp.logical_and(state.room_id == 12,
                 jnp.logical_and(jnp.logical_and(new_y >= 59, new_y <= 68),
                     jnp.logical_and(new_x >= 44, new_x < 109))))
-        native_support_finalize = jnp.logical_and(jnp.logical_or(is_climbing == 0, unanchored_climb),
+        native_support_finalize = jnp.logical_and(state.native_mode == 4, jnp.logical_and(jnp.logical_or(is_climbing == 0, unanchored_climb),
             jnp.logical_and(native_support_contact,
                 jnp.logical_or(is_jumping == 0,
                     jnp.logical_and(jump_counter >= 2,
                         # BA4A skips support dispatch when a running jump
                         # meets a wall; its final tick takes BA1F instead.
-                        jnp.logical_or(~hit_wall, last_jump_frame)))))
+                        jnp.logical_or(~hit_wall, last_jump_frame))))))
         
         # FC8E restores the standing anchor on the negative-D6 path.
         support_anchor_y = jnp.where(state.room_id == 4, 69, 63)
@@ -1482,6 +1510,11 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
                     jnp.logical_and(new_feet_y_after >= state.conveyors_y - 4,
                                     new_feet_y_after <= state.conveyors_y - 1))), jnp.logical_and(new_mid_x >= state.conveyors_x - 2, new_mid_x < state.conveyors_x + 42))
         )
+        # DB73 also moves the belt during the early jump ticks for which
+        # FC8E leaves D6 running. Its anchor band is wider than feet contact.
+        is_on_conveyor_physics = jnp.where((not self.consts.CUSTOM_ROOMS) & (state.room_id == 4),
+            (state.native_mode == 4) & (state.conveyors_active == 1) & (new_x >= 56) & (new_x < 100) & (new_y >= 65) & (new_y <= 74),
+            is_on_conveyor_physics)
         # The measured start-room belt phase differs from the other rooms.
         conveyor_phase = jnp.where(state.level > 0, state.native_frame_count + 1,
             state.frame_count + jnp.where(state.room_id == 4, 1, 0))
@@ -1563,13 +1596,14 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         
         # 7. Dying Mechanism (Fall Damage & Enemy Collision)
         fall_stopped = jnp.logical_and(state.is_falling == 1, new_is_falling == 0)
-        # B65B kills on landing after eight falling ticks. The final four
-        # pixels of stair anchor conversion are excluded from that count.
+        # B65B compares D8 with eight before clearing it at floor contact.
+        # Pose corrections and the jump's final descent are not falling
+        # dispatch ticks; their pixel distance cannot stand in for D8.
         native_stair_fall = jnp.logical_and(not self.consts.CUSTOM_ROOMS,
             state.room_id == 17)
         died_from_fall = jnp.logical_and(
             jnp.logical_and(fall_stopped, is_climbing == 0),
-            jnp.where(native_stair_fall, new_fall_distance >= self.consts.MAX_FALL_DISTANCE - 4,
+            jnp.where(not self.consts.CUSTOM_ROOMS, state.native_fall_ticks >= 8,
                 new_fall_distance > self.consts.MAX_FALL_DISTANCE)
         )
 
@@ -1844,6 +1878,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
                 jnp.logical_or(state.is_climbing == 0, state.last_rope >= 0)))))
         sample_fire = sample_fire | (is_active & (state.native_mode == 4) &
             (state.native_support_phase == NativeSupportPhase.PENDING_ANCHOR))
+        sample_fire = sample_fire & ~ladder_anchor
         final_prev_is_fire = jnp.where(jnp.logical_or(state.level == 2,
             not self.consts.CUSTOM_ROOMS),
             jnp.where(jnp.logical_or(sample_fire, state.native_mode == 5), is_fire, state.prev_is_fire), final_prev_is_fire)
@@ -1872,6 +1907,12 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             native_jump_momentum, state.native_jump_momentum)
 
         transition_any = jnp.logical_or(jnp.logical_or(transition_left, transition_right), jnp.logical_or(transition_down, transition_up))
+        falling_dispatch = state.native_mode == 7
+        native_fall_ticks = jnp.where(falling_dispatch & (new_is_falling == 1) & (is_climbing == 0),
+            state.native_fall_ticks + 1, state.native_fall_ticks)
+        native_fall_ticks = jnp.where(hit_floor | native_support_finalize | (is_climbing == 1) |
+            ((state.is_jumping == 1) & (new_is_jumping == 0)) | respawn_now | transition_any,
+            0, native_fall_ticks)
         carry = (state.room_id >= 24).astype(jnp.int32)
         carry = jnp.where(jnp.logical_and(state.level == 2,
             jnp.logical_and(jnp.any(hit_door_as_wall),
@@ -1900,15 +1941,16 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             jnp.logical_and(ladder_up, state.player_y <= rope_top_limit)), 1, carry)
         carry = jnp.where(jnp.logical_and(state.room_id == 12,
             jnp.logical_and(last_jump_frame, final_is_falling == 1)), 1, carry)
-        carry = jnp.where(jnp.logical_and(state.level == 2,
+        carry = jnp.where(jnp.logical_and(jnp.logical_or(state.level == 2,
+            jnp.logical_and(not self.consts.CUSTOM_ROOMS, state.room_id == 4)),
             jnp.logical_and(last_jump_frame, final_is_falling == 1)),
             (state.room_id != 23).astype(jnp.int32), carry)
-        # DB10's middle-band stair-gap comparison leaves carry clear when
-        # a completed rope jump enters a fall between the outer steps.
+        # DB10 leaves carry clear for a completed jump over either the
+        # middle gap or a side step whose dropout-floor pointer is absent.
         stair_gap_carry = jnp.logical_and(state.room_id == 17,
             jnp.logical_and(final_y > 26, jnp.logical_and(final_y <= 105,
                 jnp.logical_and(final_y != 76,
-                    jnp.logical_and(final_x >= 9, final_x <= 143)))))
+                    jnp.logical_or(jnp.logical_and(final_x >= 9, final_x <= 143), ~platform_active_now)))))
         carry = jnp.where(jnp.logical_and(stair_gap_carry,
             jnp.logical_and(last_jump_frame, final_is_falling == 1)), 0, carry)
         carry = jnp.where(jnp.logical_and(last_jump_frame, jnp.logical_and(ladder_up,
@@ -1919,7 +1961,10 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
         right_air_drift = jnp.logical_and(jnp.logical_and(~is_bonus_room, air_vx > 0),
             jnp.logical_and(jnp.logical_or(state.fall_after_jump == 1, drifting_fall),
                 (state.native_frame_count + 1 + 67) % 2 == 0))
-        fall_carry = jnp.where(right_air_drift, new_x >= self.consts.WIDTH - 9, fall_carry)
+        # FC76 uses the lower-floor wall bound (native149), rather than
+        # the side-exit anchor, when a drifting fall reaches that wall.
+        fall_right_bound = jnp.where(side_exit_height, self.consts.WIDTH - 9, 148)
+        fall_carry = jnp.where(right_air_drift, new_x >= fall_right_bound, fall_carry)
         # Standing dispatch can prepare mode7 before any falling motion.
         # Its next contact still follows the standing path, including carry.
         carry = jnp.where(jnp.logical_and(jnp.isin(state.native_mode, jnp.array([7, 8])),
@@ -1999,6 +2044,7 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
             rolling_skull_phase=rolling_phase, native_room_history=new_history,
             native_rolling_x=rolling_x, native_rolling_direction=rolling_direction,
             native_mode=next_mode.astype(jnp.int32), native_rng_carry=carry.astype(jnp.int32),
+            native_fall_ticks=jnp.where(is_active | respawn_now, native_fall_ticks, state.native_fall_ticks),
             game_over_pending=final_death,
             lives=new_lives,
             score=new_score,
@@ -2022,9 +2068,11 @@ class JaxMontezumaRevenge(JaxEnvironment[MontezumaRevengeState, MontezumaRevenge
                 not self.consts.CUSTOM_ROOMS),
                 native_jump_momentum, state.native_jump_momentum),
             native_support_phase=jnp.where(is_active & (new_death_timer == 0) & ~respawn_now & (not self.consts.CUSTOM_ROOMS),
+                jnp.where(native_ladder_anchor | (ladder_anchor & ~(is_up | is_down | is_left | is_right)),
+                    NativeSupportPhase.LADDER_ANCHOR,
                 jnp.where(unanchored_climb & (final_is_climbing == 1), NativeSupportPhase.UNANCHORED_CLIMB,
                     jnp.where(native_support_finalize & (state.is_jumping == 1) & (new_y != support_anchor_y),
-                        NativeSupportPhase.PENDING_ANCHOR, NativeSupportPhase.NORMAL)), NativeSupportPhase.NORMAL),
+                        NativeSupportPhase.PENDING_ANCHOR, NativeSupportPhase.NORMAL))), NativeSupportPhase.NORMAL),
             native_climb_moving=jnp.where(is_active,
                 jnp.logical_and(final_is_climbing == 1, jnp.logical_or(ladder_up, ladder_down)),
                 state.native_climb_moving),
