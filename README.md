@@ -3,6 +3,17 @@
 Quentin Delfosse*, Raban Emunds*, Paul Seitz*, Sebastian Wette*, Jannis Blüml*, Daniel Kirn, Dominik Mandok, Kristian Kersting —  
 [AI/ML Lab, TU Darmstadt](https://www.aiml.informatik.tu-darmstadt.de/)
 
+> [!TIP]
+> 🕹️ **Play JAXtari right in your browser, no installation required!**
+>
+> [![Play the JAXtari Arcade](https://img.shields.io/badge/%E2%96%B6%20Play-JAXtari%20Arcade-2ea44f)](https://ml-research.github.io/people/remunds/jaxtari-arcade)
+
+[![arXiv](https://img.shields.io/badge/arXiv-2610.23650-b31b1b.svg?logo=arxiv)](https://arxiv.org/abs/2610.23650)
+[![NeurIPS 2026 E&D Track](https://img.shields.io/badge/NeurIPS%202026-Evaluations%20%26%20Datasets%20Track-4b44ce.svg)](https://arxiv.org/abs/2610.23650)
+[![W&B Report: Baselines](https://img.shields.io/badge/W%26B-JAXtari%20vs%20CleanRL%2FEnvPool%2FOCAtari-FFBE00?logo=weightsandbiases&logoColor=white)](https://forge.coreweave.com/wandb/jaxatari/blines_camera_ready/reports/JAXtari-PPO-PQN-vs-CleanRL-PPO-EnvPool-and-OCAtari-Atari-camera-ready--VmlldzoxODE4MzM0OA)
+[![W&B Report: PQN vs PPO](https://img.shields.io/badge/W%26B-PQN%20vs%20PPO%20%28tuned%29-FFBE00?logo=weightsandbiases&logoColor=white)](https://forge.coreweave.com/wandb/jaxatari/blines_camera_ready/reports/JAXtari-PQN-tuned-vs-PPO-tuned-camera-ready--VmlldzoxODE4MzM1MA)
+[![Baselines](https://img.shields.io/badge/GitHub-jaxtari--blines-181717?logo=github)](https://github.com/remunds/jaxtari-blines)
+
 [Citation](#citation) • [Features](#features) • [Installation](#installation) • [Quick Start](#quick-start) • [Wrappers](#wrapper-reference) • [Environments](#available-environments) • [Contributing](#contributing) • [License](LICENSE)
 
 
@@ -352,15 +363,16 @@ Feel free to share new mods or environments by opening a PR!
 ## Citation
 
 ```bibtex
-@misc{jaxatari2026,
-  author = {Delfosse, Quentin and Emunds, Raban and Seitz, Paul and Wette, Sebastian and Kirn, Daniel and Mandok, Dominik and Bl{\"u}ml, Jannis and Kersting, Kristian},
-  title = {JAXtari: High-Throughput and Easy-to-Modify Arcade Learning Environment},
-  year = {2026},
-  publisher = {GitHub},
-  journal = {GitHub repository},
-  howpublished = {https://github.com/k4ntz/Jaxtari/},
+@inproceedings{delfosse2026jaxtari,
+  author    = {Delfosse, Quentin and Emunds, Raban and Seitz, Paul and Wette, Sebastian and Bl{\"u}ml, Jannis and Kirn, Daniel and Mandok, Dominik and Kersting, Kristian},
+  title     = {JAXtari: High-Throughput and Easy-to-Modify Arcade Learning Environment},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS), Evaluations and Datasets Track},
+  year      = {2026},
+  url       = {https://arxiv.org/abs/2610.23650},
 }
 ```
+
+Baseline training code and configurations used in the paper are available at [remunds/jaxtari-blines](https://github.com/remunds/jaxtari-blines); full results are in the W&B reports [JAXtari PPO/PQN vs. CleanRL PPO (EnvPool & OCAtari)](https://forge.coreweave.com/wandb/jaxatari/blines_camera_ready/reports/JAXtari-PPO-PQN-vs-CleanRL-PPO-EnvPool-and-OCAtari-Atari-camera-ready--VmlldzoxODE4MzM0OA) and [JAXtari PQN (tuned) vs. PPO (tuned)](https://forge.coreweave.com/wandb/jaxatari/blines_camera_ready/reports/JAXtari-PQN-tuned-vs-PPO-tuned-camera-ready--VmlldzoxODE4MzM1MA).
 
 ---
 
