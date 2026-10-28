@@ -305,3 +305,27 @@ class DifficultyImpossibleMod(JaxtariPostStepModPlugin):
         new_y = jnp.where(hit_occurred, start_y, new_state.chicken_y)
         return new_state.replace(chicken_y=new_y)
 
+class FreewayShiftCarRowsMod(JaxtariInternalModPlugin):
+    """Move each car row down 3px within its lane (offset 1 -> 4)."""
+    constants_overrides = {"car_y_offset": 4}
+
+
+class FreewayNoCarsMod(JaxtariInternalModPlugin):
+    """Remove traffic from physics, rendering and OC activity; keep crossing score."""
+    @partial(jax.jit, static_argnums=(0,))
+    def reset(self, key=None):
+        _, state = type(self._env).reset(self._env, key)
+        state = state.replace(cars=state.cars.at[:, 1].set(-1000))
+        return self._env._get_observation(state), state
+
+    @partial(jax.jit, static_argnums=(0,))
+    def step(self, state, action):
+        # Exclude traffic BEFORE collision processing, including externally supplied states.
+        state = state.replace(cars=state.cars.at[:, 1].set(-1000))
+        return type(self._env).step(self._env, state, action)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _get_observation(self, state):
+        obs = type(self._env)._get_observation(self._env, state)
+        return obs.replace(car=obs.car.replace(active=jnp.zeros_like(obs.car.active)))
+

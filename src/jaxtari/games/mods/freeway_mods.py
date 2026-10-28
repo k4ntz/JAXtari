@@ -3,7 +3,8 @@ from jaxtari.modification import JaxtariModController
 from jaxtari.games.mods.freeway.freeway_mod_plugins import (
     StopAllCarsMod, StaticCarsMod, SlowCarsMod, BlackCarsMod, CenterCarsOnResetMod, InvertSpeed,
     HallOfFameMod, BikesMod, FrogMod, NewLaneColorsMod, GreenScoreMod,
-    DifficultyEasyMod, DifficultyNormalMod, DifficultyHardMod, DifficultyImpossibleMod
+    DifficultyEasyMod, DifficultyNormalMod, DifficultyHardMod, DifficultyImpossibleMod,
+    FreewayShiftCarRowsMod, FreewayNoCarsMod,
 )
 
 class FreewayEnvMod(JaxtariModController):
@@ -13,6 +14,8 @@ class FreewayEnvMod(JaxtariModController):
     """
 
     REGISTRY = {
+        "shift_car_rows": FreewayShiftCarRowsMod,
+        "no_cars": FreewayNoCarsMod,
         "stop_all_cars": StopAllCarsMod,
         "static_cars": StaticCarsMod,
         "slow_cars": SlowCarsMod,

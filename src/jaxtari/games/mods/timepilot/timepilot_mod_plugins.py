@@ -239,3 +239,19 @@ class ExtraLivesMod(JaxtariPostStepModPlugin):
     def after_reset(self, obs, state):
         return obs, state.replace(lives=jnp.array(9, dtype=jnp.int32))
 
+
+class TimePilotShiftAnchorMod(JaxtariInternalModPlugin):
+    """Move the fixed player anchor 8px right, including shots and collisions."""
+    constants_overrides = {"PLAYER_X": 84}
+
+
+class TimePilotNoEnemyFireMod(JaxtariInternalModPlugin):
+    """Remove enemy missiles, retaining aircraft, scoring and movement."""
+    @partial(jax.jit, static_argnums=(0,))
+    def enemy_missile_step(self, missile_states, enemy_states, enemy_attack, rng_key):
+        out, key = type(self._env).enemy_missile_step(
+            self._env, missile_states, enemy_states, enemy_attack, rng_key
+        )
+        # Consume the normal random draw, preserving the aircraft RNG stream.
+        return out.at[:, 3].set(0), key
+

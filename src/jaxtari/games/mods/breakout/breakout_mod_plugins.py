@@ -139,3 +139,13 @@ class PlayerColorMod(JaxtariInternalModPlugin):
         "PLAYER_COLOR": (255, 255, 0),  # Yellow by default
     }
 
+
+class BreakoutShiftPaddleRowMod(JaxtariInternalModPlugin):
+    """Move the paddle up 8px, preserving its width and ball motion rules."""
+    constants_overrides = {"PLAYER_START_Y": 181}
+
+
+class BreakoutWiderPaddleMod(JaxtariInternalModPlugin):
+    """Add 8px to both native paddle widths; preserve shrink and ball rules."""
+    constants_overrides = {"PLAYER_SIZE": (24, 4), "PLAYER_SIZE_SMALL": (20, 4)}
+

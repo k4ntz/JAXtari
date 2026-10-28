@@ -1,5 +1,9 @@
-from jaxtari.modification import JaxtariInternalModPlugin, JaxtariPostStepModPlugin
+from functools import partial
+
+import jax
 import jax.numpy as jnp
+
+from jaxtari.modification import JaxtariInternalModPlugin, JaxtariPostStepModPlugin
 from jaxtari.games.jax_phoenix import PhoenixState
 
 
@@ -136,3 +140,32 @@ class BloodMoonMod(JaxtariInternalModPlugin):
         'RGB_BATS_BLUE': (150, 0, 0),
         'RGB_BATS_RED': (255, 100, 100),
     }
+
+
+class PhoenixShiftPlayerRowMod(JaxtariInternalModPlugin):
+    """Move the fixed player row up 4px; retain X, width and movement speed."""
+    constants_overrides = {"PLAYER_POSITION": (79, 169)}
+
+
+class PhoenixNoEnemyFireMod(JaxtariInternalModPlugin):
+    """Suppress new shots in bird, bat and boss waves; retain actor movement."""
+    @partial(jax.jit, static_argnums=(0,))
+    def _phoenix_small_bird_enemy_fire(self, state, pre_step_phoenix_do_attack, step_counter):
+        out = type(self._env)._phoenix_small_bird_enemy_fire(
+            self._env, state, pre_step_phoenix_do_attack, step_counter
+        )
+        return out._replace(
+            salvo_fire_mask=jnp.zeros_like(out.salvo_fire_mask),
+            salvo_x=jnp.full_like(out.salvo_x, -1),
+            salvo_y=jnp.full_like(out.salvo_y, -1),
+        )
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _bat_wave_enemy_fire(self, key, state, not_attacking):
+        out = type(self._env)._bat_wave_enemy_fire(self._env, key, state, not_attacking)
+        return out._replace(enemy_fire_mask=jnp.zeros_like(out.enemy_fire_mask))
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _boss_enemy_fire(self, key, state, not_attacking):
+        out = type(self._env)._boss_enemy_fire(self._env, key, state, not_attacking)
+        return out._replace(enemy_fire_mask=jnp.zeros_like(out.enemy_fire_mask))

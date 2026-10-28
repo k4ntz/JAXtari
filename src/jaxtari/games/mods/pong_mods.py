@@ -3,7 +3,11 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 from jaxtari.modification import JaxtariModController
-from jaxtari.games.mods.pong.pong_mod_plugins import LazyEnemyMod, RandomEnemyMod, AlwaysZeroScoreMod, LinearMovementMod, ShiftPlayerMod, ShiftEnemyMod, NoFireMod, ChangeBackgroundColorMod, ChangePlayerColorMod, TriplePongMod
+from jaxtari.games.mods.pong.pong_mod_plugins import (
+    LazyEnemyMod, RandomEnemyMod, AlwaysZeroScoreMod, LinearMovementMod,
+    ShiftPlayerMod, ShiftEnemyMod, NoFireMod, ChangeBackgroundColorMod,
+    ChangePlayerColorMod, TriplePongMod, PongShiftPlayerPlaneMod, PongSlowerEnemyMod,
+)
 
 class PongEnvMod(JaxtariModController):    
     """
@@ -12,6 +16,8 @@ class PongEnvMod(JaxtariModController):
     """
 
     REGISTRY = {
+        "shift_player_plane": PongShiftPlayerPlaneMod,
+        "slower_enemy": PongSlowerEnemyMod,
         "lazy_enemy": LazyEnemyMod,
         "random_enemy": RandomEnemyMod,
         "zero_score": AlwaysZeroScoreMod,

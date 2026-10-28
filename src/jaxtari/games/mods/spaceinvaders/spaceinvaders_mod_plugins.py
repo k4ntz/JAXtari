@@ -106,3 +106,18 @@ class NoDangerMod(JaxtariPostStepModPlugin):
             enemy_bullets_active=jnp.zeros_like(state.enemy_bullets_active, dtype=jnp.bool_)
         )
         return self._env._get_observation(state), state
+
+
+class SpaceInvadersShiftShieldRowMod(JaxtariInternalModPlugin):
+    """Move the unchanged three bunkers up 6px."""
+    constants_overrides = {
+        "BARRICADE_POS": (jnp.array([41, 73, 105], dtype=jnp.int32), 151),
+    }
+
+
+class SpaceInvadersNoEnemyFireMod(JaxtariInternalModPlugin):
+    """Remove incoming bullets without removing aliens, bunkers or the UFO."""
+    @partial(jax.jit, static_argnums=(0,))
+    def _update_enemy_bullets(self, state, key):
+        active, x, y, cooldown = type(self._env)._update_enemy_bullets(self._env, state, key)
+        return jnp.zeros_like(active), x, y, cooldown

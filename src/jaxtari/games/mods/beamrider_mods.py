@@ -8,6 +8,8 @@ from jaxtari.games.mods.beamrider.beamrider_mod_plugins import (
     TeleportUFOsMod,
     ThreeLanesMod,
     ToasterMod,
+    BeamriderShiftPlayerRowMod,
+    BeamriderNoEnemyShotsMod,
 )
 
 
@@ -17,6 +19,8 @@ class BeamRiderEnvMod(JaxtariModController):
     """
 
     REGISTRY = {
+        "shift_player_row": BeamriderShiftPlayerRowMod,
+        "no_enemy_shots": BeamriderNoEnemyShotsMod,
         "double_enemy_speed": DoubleEnemySpeedMod,
         "fog_of_war": FogOfWarMod,
         "hardcore": HardcoreMod,

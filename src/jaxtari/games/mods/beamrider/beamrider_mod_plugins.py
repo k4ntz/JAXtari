@@ -3688,3 +3688,19 @@ class TeleportUFOsMod(JaxtariInternalModPlugin):
             pattern_timer,
             new_key,
         )
+class BeamriderShiftPlayerRowMod(JaxtariInternalModPlugin):
+    """Move the player's fixed Y up 4px, retaining the seven-lane track."""
+    constants_overrides = {"PLAYER_POS_Y": 160}
+
+
+class BeamriderNoEnemyShotsMod(JaxtariInternalModPlugin):
+    """Remove UFO shots only; preserve UFO patterns and all scoring objects."""
+    @partial(jax.jit, static_argnums=(0,))
+    def _enemy_shot_step(self, state, white_ufo_pos, white_ufo_pattern_id, white_ufo_pattern_timer):
+        return (
+            self._env.bullet_offscreen_shots,
+            jnp.zeros_like(state.level.enemy_shot_vel),
+            jnp.zeros_like(state.level.enemy_shot_timer),
+            jnp.int32(0),
+        )
+

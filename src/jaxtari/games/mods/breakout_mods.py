@@ -9,6 +9,8 @@ from jaxtari.games.mods.breakout.breakout_mod_plugins import (
     BallColorMod,
     BlockColorMod,
     PlayerColorMod,
+    BreakoutShiftPaddleRowMod,
+    BreakoutWiderPaddleMod,
 )
 
 class BreakoutEnvMod(JaxtariModController):
@@ -18,6 +20,8 @@ class BreakoutEnvMod(JaxtariModController):
     """
 
     REGISTRY = {
+        "shift_paddle_row": BreakoutShiftPaddleRowMod,
+        "wider_paddle": BreakoutWiderPaddleMod,
         "speed_mode": SpeedModeMod,
         "small_paddle": SmallPaddleMod,
         "big_paddle": BigPaddleMod,

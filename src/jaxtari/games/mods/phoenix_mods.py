@@ -11,6 +11,8 @@ from jaxtari.games.mods.phoenix.phoenix_mod_plugins import (
     InvertedColorsMod,
     MatrixMod,
     BloodMoonMod,
+    PhoenixShiftPlayerRowMod,
+    PhoenixNoEnemyFireMod,
 )
 
 
@@ -20,6 +22,8 @@ class PhoenixEnvMod(JaxtariModController):
     """
 
     REGISTRY = {
+        "shift_player_row": PhoenixShiftPlayerRowMod,
+        "no_enemy_fire": PhoenixNoEnemyFireMod,
         "boss_late_missiles": BossLateMissilesMod,
         "infinite_lives": InfiniteLivesMod,
         "fast_player": FastPlayerMod,

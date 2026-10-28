@@ -6,7 +6,9 @@ from jaxtari.games.mods.spaceinvaders.spaceinvaders_mod_plugins import (
     DisableShieldRightMod,
     ShiftShieldsMod,
     ControllableMissileMod,
-    NoDangerMod
+    NoDangerMod,
+    SpaceInvadersShiftShieldRowMod,
+    SpaceInvadersNoEnemyFireMod,
 )
 
 class SpaceInvadersEnvMod(JaxtariModController):    
@@ -15,6 +17,8 @@ class SpaceInvadersEnvMod(JaxtariModController):
     """
 
     REGISTRY = {
+        "shift_shield_row": SpaceInvadersShiftShieldRowMod,
+        "no_enemy_fire": SpaceInvadersNoEnemyFireMod,
         "disable_shield_left": DisableShieldLeftMod,
         "disable_shield_middle": DisableShieldMiddleMod,
         "disable_shield_right": DisableShieldRightMod,

@@ -5,7 +5,9 @@ from jaxtari.games.mods.timepilot.timepilot_mod_plugins import (
     MatrixMod,
     ExtraLivesMod,
     InstantTurnMod,
-    ReverseChronologyMod
+    ReverseChronologyMod,
+    TimePilotShiftAnchorMod,
+    TimePilotNoEnemyFireMod,
 )
 
 class TimePilotEnvMod(JaxtariModController):    
@@ -15,6 +17,8 @@ class TimePilotEnvMod(JaxtariModController):
     """
 
     REGISTRY = {
+        "shift_player_anchor": TimePilotShiftAnchorMod,
+        "no_enemy_fire": TimePilotNoEnemyFireMod,
         "dont_kill": DontKillMod,
         "matrix_theme": MatrixMod,
         "extra_lives": ExtraLivesMod,

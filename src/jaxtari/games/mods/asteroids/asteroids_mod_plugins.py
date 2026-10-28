@@ -343,3 +343,21 @@ class InstantTurnMod(JaxtariInternalModPlugin):
             lambda: (state_player_x, state_player_y, state_player_speed_x, state_player_speed_y,
                      state_player_rotation, state_respawn_timer, rng_key)
         )
+
+
+class AsteroidsShiftInitialRocksMod(JaxtariPostStepModPlugin):
+    """Translate initial active rocks 8px down; velocities and later spawns stay native."""
+    @partial(jax.jit, static_argnums=(0,))
+    def after_reset(self, obs, state):
+        rocks = state.asteroid_states
+        active = rocks[:, 3] != self._env.consts.INACTIVE
+        rocks = rocks.at[:, 1].add(jnp.where(active, 8, 0))
+        state = state.replace(asteroid_states=rocks)
+        return self._env._get_observation(state), state
+
+
+class AsteroidsNoShipCollisionsMod(JaxtariInternalModPlugin):
+    """Keep moving, shootable and splitting rocks, but remove ship collision damage."""
+    @partial(jax.jit, static_argnums=(0,))
+    def player_hit(self, player_x, player_y, player_active, asteroid_states):
+        return jnp.int32(-1)

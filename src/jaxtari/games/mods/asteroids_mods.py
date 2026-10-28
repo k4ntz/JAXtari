@@ -1,6 +1,13 @@
 import os
 from jaxtari.modification import JaxtariModController
-from jaxtari.games.mods.asteroids.asteroids_mod_plugins import DontShootMod, MatrixMod, SlowAsteroidsMod, InstantTurnMod
+from jaxtari.games.mods.asteroids.asteroids_mod_plugins import (
+    DontShootMod,
+    MatrixMod,
+    SlowAsteroidsMod,
+    InstantTurnMod,
+    AsteroidsShiftInitialRocksMod,
+    AsteroidsNoShipCollisionsMod,
+)
 
 class AsteroidsEnvMod(JaxtariModController):
     """
@@ -8,6 +15,8 @@ class AsteroidsEnvMod(JaxtariModController):
     """
 
     REGISTRY = {
+        "shift_initial_rocks": AsteroidsShiftInitialRocksMod,
+        "no_ship_collisions": AsteroidsNoShipCollisionsMod,
         "dont_shoot": DontShootMod,
         "matrix_theme": MatrixMod,
         "slow_asteroids": SlowAsteroidsMod,

@@ -1049,8 +1049,20 @@ class BreakoutRenderer(JAXGameRenderer):
         # Start with the background palette IDs
         raster = self.BACKGROUND
 
-        # 2. Draw player and ball using the standard API
-        raster = self.jr.render_at(raster, state.player_x, self.consts.PLAYER_START_Y, self.SHAPE_MASKS["player"])
+        # 2. Draw player and ball using the standard API.
+        # A wider or narrower paddle must show its collision width. The native
+        # 16px sprite path stays untouched so existing renders do not change.
+        paddle_mask = self.SHAPE_MASKS["player"]
+        if self.consts.PLAYER_SIZE != (16, 4):
+            paddle_width = jnp.where(
+                state.small_paddle, self.consts.PLAYER_SIZE_SMALL[0], self.consts.PLAYER_SIZE[0]
+            )
+            paddle_mask = jnp.where(
+                jnp.arange(paddle_mask.shape[1])[None, :] < paddle_width,
+                paddle_mask,
+                self.jr.TRANSPARENT_ID,
+            )
+        raster = self.jr.render_at(raster, state.player_x, self.consts.PLAYER_START_Y, paddle_mask)
         ball_x = jnp.where(state.game_started, state.ball_x, -10)
         ball_y = jnp.where(state.game_started, state.ball_y, -10)
         raster = self.jr.render_at(raster, ball_x, ball_y, self.SHAPE_MASKS["ball"])

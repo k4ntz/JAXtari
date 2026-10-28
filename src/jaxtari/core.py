@@ -133,6 +133,7 @@ MOD_MODULES = {
     "qbert": "jaxtari.games.mods.qbert_mods.QbertEnvMod",
     "roadrunner": "jaxtari.games.mods.roadrunner_mods.RoadRunnerEnvMod",
     "mspacman": "jaxtari.games.mods.mspacman_mods.MsPacmanEnvMod",
+    "namethisgame": "jaxtari.games.mods.namethisgame_mods.NameThisGameEnvMod",
     "beamrider": "jaxtari.games.mods.beamrider_mods.BeamRiderEnvMod",
     "venture": "jaxtari.games.mods.venture_mods.VentureEnvMod",
     "spaceinvaders": "jaxtari.games.mods.spaceinvaders_mods.SpaceInvadersEnvMod",

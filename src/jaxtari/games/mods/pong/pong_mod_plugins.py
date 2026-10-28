@@ -497,3 +497,12 @@ class TriplePongMod(JaxtariInternalModPlugin):
             "score_player": spaces.Box(low=0, high=21, shape=(), dtype=jnp.int32),
             "score_enemy": spaces.Box(low=0, high=21, shape=(), dtype=jnp.int32),
         })
+class PongShiftPlayerPlaneMod(JaxtariInternalModPlugin):
+    """Move the player's interception plane inward by 8px (140 -> 132)."""
+    constants_overrides = {"PLAYER_X": 132}
+
+
+class PongSlowerEnemyMod(JaxtariInternalModPlugin):
+    """Halve opponent step size while retaining its native tracking policy."""
+    constants_overrides = {"ENEMY_STEP_SIZE": 1}
+
