@@ -1,0 +1,10 @@
+# Versions used in the frozen evaluation; use Python 3.12.
+jax==0.7.0
+jaxlib==0.7.0
+numpy==1.26.4
+scipy==1.15.3
+flax==0.10.6
+ocatari==2.2.2
+ale-py==0.11.1
+gymnasium==1.2.0
+pillow==11.3.0

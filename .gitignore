@@ -6,6 +6,7 @@ env
 .idea
 *.bc
 results/
+docs/issue-reports/camera-ready-trajectory-transfer/heldout/raw/
 .DS_Store
 docs/build/
 .python-version
@@ -13,6 +14,9 @@ data/oc_parity_corpus/raw/
 data/oc_parity_corpus/reports/
 data/oc_parity_corpus/reports_oracle/
 data/oc_parity_corpus/final_report/
+data/oc_parity_corpus/camera_ready*/
+data/oc_parity_corpus/camera_ready*.log
+data/oc_parity_holdout*/
 
 # detector datasets / training runs (train_detection/)
 train_detection/datasets/
