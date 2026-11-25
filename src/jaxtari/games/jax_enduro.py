@@ -375,24 +375,26 @@ class EnduroConstants(AutoDerivedConstants):
             self.initial_guaranteed_cars
         )
 
-        weather_starts_s = jnp.array([
-            34,  # day 1
-            34 + 34,  # day 2 (lighter)
-            34 + 34 + 34,  # day 3 (white mountains)
-            34 + 34 + 34 + 69,  # snow (steering is more difficult)
-            34 + 34 + 34 + 69 + 8 * 1,  # Sunset 1
-            34 + 34 + 34 + 69 + 8 * 2,  # Sunset 2
-            34 + 34 + 34 + 69 + 8 * 3,  # Sunset 3
-            34 + 34 + 34 + 69 + 8 * 4,  # Sunset 4
-            34 + 34 + 34 + 69 + 8 * 5,  # Sunset 5
-            34 + 34 + 34 + 69 + 8 * 6,  # Sunset 6
-            34 + 34 + 34 + 69 + 8 * 7,  # Sunset 7
-            34 + 34 + 34 + 69 + 8 * 8,  # Sunset 8
-            34 + 34 + 34 + 69 + 8 * 8 + 69,  # night 1
-            34 + 34 + 34 + 69 + 8 * 8 + 69 + 69,  # fog night
-            34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34,  # night 2
-            34 + 34 + 34 + 69 + 8 * 8 + 69 + 69 + 34 + 34,  # dawn
-        ], dtype=jnp.int32)
+        # Phase lengths in frames, as in ALE; a day lasts 13312.
+        weather_phase_frames = jnp.array([
+            1024,  # day 1
+            1024,  # day 2 (lighter)
+            1024,  # day 3 (white mountains)
+            2048,  # snow (steering is more difficult)
+            256,  # Sunset 1
+            256,  # Sunset 2
+            256,  # Sunset 3
+            256,  # Sunset 4
+            256,  # Sunset 5
+            256,  # Sunset 6
+            256,  # Sunset 7
+            256,  # Sunset 8
+            2048,  # night 1
+            2048,  # fog night
+            1024,  # night 2
+            1024,  # dawn
+        ])
+        weather_starts_s = jnp.cumsum(weather_phase_frames) / self.frame_rate
         day_cycle_time = weather_starts_s[15]
 
         return {
@@ -1492,11 +1494,11 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # Keep the "cars to pass" counter bounded:
         # - decreases when the player overtakes
         # - increases when opponents overtake from behind
-        # - never below 0 and never above the initial position (200)
+        # - never below 0 and never above the day's starting position (200, later 300)
         new_cars_to_pass = jnp.clip(
             state.cars_to_pass - cars_overtaken_change,
             0,
-            self.consts.initial_position
+            jnp.where(state.level > 1, self.consts.next_day_car_position, self.consts.initial_position)
         )
 
         # ====== COLLISIONS ======
@@ -1622,9 +1624,11 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         new_step_count = state.step_count + 1
 
         # Calculate time-based weather and day
-        cycled_time = (new_step_count / self.consts.frame_rate) % self.consts.day_cycle_time
+        # Half a frame keeps float rounding away from the phase boundaries.
+        elapsed_time = (new_step_count + 0.5) / self.consts.frame_rate
+        cycled_time = elapsed_time % self.consts.day_cycle_time
         time_weather_index = jnp.searchsorted(self.consts.weather_starts_s, cycled_time, side='right')
-        time_day_count = jnp.floor(new_step_count / self.consts.frame_rate / self.consts.day_cycle_time).astype(jnp.int32)
+        time_day_count = jnp.floor(elapsed_time / self.consts.day_cycle_time).astype(jnp.int32)
 
         # Calculate distance-based weather and day
         # In distance mode, weather cycles every 16km, changing index every 1km
