@@ -790,7 +790,7 @@ class JaxBreakout(JaxEnvironment[BreakoutState, BreakoutObservation, BreakoutInf
 
     @partial(jax.jit, static_argnums=(0,))
     def _get_done(self, state: BreakoutState) -> chex.Array:
-        return jnp.logical_or(state.lives <= 0, state.all_blocks_cleared)
+        return state.lives <= 0
 
     def action_space(self) -> spaces.Discrete:
         """Returns the action space for Breakout.
