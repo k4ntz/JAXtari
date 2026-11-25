@@ -1492,11 +1492,11 @@ class JaxEnduro(JaxEnvironment[EnduroGameState, EnduroObservation, EnduroInfo, E
         # Keep the "cars to pass" counter bounded:
         # - decreases when the player overtakes
         # - increases when opponents overtake from behind
-        # - never below 0 and never above the initial position (200)
+        # - never below 0 and never above the day's starting position (200, later 300)
         new_cars_to_pass = jnp.clip(
             state.cars_to_pass - cars_overtaken_change,
             0,
-            self.consts.initial_position
+            jnp.where(state.level > 1, self.consts.next_day_car_position, self.consts.initial_position)
         )
 
         # ====== COLLISIONS ======
