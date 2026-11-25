@@ -878,12 +878,13 @@ class JaxSkiing(JaxEnvironment[SkiingState, SkiingObservation, SkiingInfo, Skiin
         if self.consts.USE_ORIGINAL_ALE_REWARD:
             # https://github.com/Farama-Foundation/Arcade-Learning-Environment/blob/d10a9b3f2ea27da2a53d3bed732ef62c5c51b82f/src/ale/games/supported/Skiing.cpp
             # In ALE, the final reward incorporates a massive penalty for missed gates.
-            done = self._get_done(state)
-            missed_gates = 20 - state.successful_gates
+            # It is paid at the finish only, not when the time limit is reached.
+            finished = state.gates_seen >= 20
+            missed_gates = state.successful_gates  # counts down from 20
             end_penalty = -(missed_gates * 500.0)
             
             step_reward = self.consts.ORIGINAL_SCORES[state.step_count % 3] # time penalty
-            reward = jnp.where(done, end_penalty, step_reward).astype(jnp.float32)
+            reward = jnp.where(finished, end_penalty, step_reward).astype(jnp.float32)
             return reward
             
         return (previous_state.successful_gates - state.successful_gates).astype(jnp.float32)

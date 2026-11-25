@@ -930,6 +930,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 			return state.replace(
 				gamestate=new_gamestate,
 				stage_steps=0,
+				score=state.score + jnp.where(player_reached_top, state.bonus_timer, 0),
 				player_x=new_player_x,
 				player_y=new_player_y,
 				princess_visible=1,
@@ -2327,7 +2328,7 @@ class JaxKingKong(JaxEnvironment[KingKongState, KingKongObservation, KingKongInf
 
 	@partial(jax.jit, static_argnums=(0,))
 	def _get_reward(self, previous_state: KingKongState, state: KingKongState):
-		return state.score - previous_state.score # could be changed to also account for bonus timer e.g. 
+		return state.score - previous_state.score
 
 	@partial(jax.jit, static_argnums=(0,))
 	def _get_done(self, state: KingKongState) -> bool:
