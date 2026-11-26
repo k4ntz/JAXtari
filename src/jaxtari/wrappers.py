@@ -56,7 +56,7 @@ class NoiseWrapper(JaxtariWrapper):
     Example:
         base_env = jaxtari.make("Pong")
         env = AtariWrapper(base_env)
-        env = NoiseWrapper(env, detect_prob=0.95, std_dev=0.5)
+        env = NoiseWrapper(env, detect_prob=0.95, std_dev=0.5)  # relatively realistic detector settings
         env = ObjectCentricWrapper(env, frame_stack_size=4)
     """
 
