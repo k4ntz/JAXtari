@@ -13,7 +13,7 @@ import jax
 import jax.image as jim
 import jax.numpy as jnp
 from jax import flatten_util
-from jaxtari.environment import EnvState, JaxtariAction as Action
+from jaxtari.environment import EnvState, ObjectObservation, JaxtariAction as Action
 import jaxtari.spaces as spaces
 import numpy as np
 
@@ -61,7 +61,6 @@ class NoiseWrapper(JaxtariWrapper):
     """
 
     JITTERED_FIELDS = ("x", "y", "width", "height", "orientation")
-    NON_NEGATIVE_FIELDS = ("width", "height")
 
     def __init__(self, env, detect_prob: float = 1.0, std_dev: float = 0.0):
         super().__init__(env)
@@ -76,37 +75,35 @@ class NoiseWrapper(JaxtariWrapper):
     @functools.partial(jax.jit, static_argnums=(0,))
     def _add_noise_to_obs(self, obs: chex.ArrayTree, key: chex.PRNGKey) -> chex.ArrayTree:
         """
-        Jitter the geometry of every object instance, then drop whole instances.
+        Add Gaussian noise to the geometry of each object instance,
+        then randomly drop entire instances.
         """
-        from jaxtari.environment import ObjectObservation
-
         is_object = lambda node: isinstance(node, ObjectObservation)
         nodes, treedef = jax.tree.flatten(obs, is_leaf=is_object)
         keys = jax.random.split(key, len(nodes))
 
         def process_object(obj, key):
-            drop_key, noise_key = jax.random.split(key)
-            instances = jnp.shape(obj.x)
-            # 1 draw per instance, shared by all of its fields
-            keep = jax.random.bernoulli(drop_key, p=self.detect_prob, shape=instances)
-            fields = {}
-            for index, name in enumerate(obj.__dataclass_fields__):
-                value = jnp.asarray(getattr(obj, name)).astype(jnp.float32)
-                if name in self.JITTERED_FIELDS:
-                    noise = jax.random.normal(
-                        jax.random.fold_in(noise_key, index), shape=value.shape)
-                    value = value + noise * self.std_dev
-                    if name in self.NON_NEGATIVE_FIELDS:
-                        value = jnp.maximum(value, 0.0)
-                keep_b = keep.reshape(keep.shape + (1,) * (value.ndim - keep.ndim)) \
-                    if value.ndim > keep.ndim else keep
-                fields[name] = jnp.where(keep_b, value, jnp.zeros_like(value))
-            return obj.replace(**fields)
+            obj = jax.tree.map(lambda leaf: leaf.astype(jnp.float32), obj)
+            drop_key, *noise_keys = jax.random.split(key, len(self.JITTERED_FIELDS) + 1)
+            # 1. Add Gaussian noise to the geometry fields (sizes stay non-negative)
+            noisy = {
+                name: getattr(obj, name) + jax.random.normal(nk, getattr(obj, name).shape) * self.std_dev
+                for name, nk in zip(self.JITTERED_FIELDS, noise_keys)
+            }
+            noisy["width"] = jnp.maximum(noisy["width"], 0.0)
+            noisy["height"] = jnp.maximum(noisy["height"], 0.0)
+            obj = obj.replace(**noisy)
+            # 2. Randomly drop (zero out) entire instances: one draw per instance, shared by all fields
+            keep = jax.random.bernoulli(drop_key, p=self.detect_prob, shape=obj.x.shape)
+            drop = lambda leaf: jnp.where(
+                keep.reshape(keep.shape + (1,) * (leaf.ndim - keep.ndim)), leaf, jnp.zeros_like(leaf))
+            return jax.tree.map(drop, obj)
 
-        noisy = [process_object(node, k) if is_object(node)
-                 else jnp.asarray(node).astype(jnp.float32)
-                 for node, k in zip(nodes, keys)]
-        return jax.tree.unflatten(treedef, noisy)
+        noisy_nodes = [
+            process_object(node, k) if is_object(node) else jnp.asarray(node, jnp.float32)
+            for node, k in zip(nodes, keys)
+        ]
+        return jax.tree.unflatten(treedef, noisy_nodes)
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey) -> Tuple[chex.ArrayTree, Any]:
