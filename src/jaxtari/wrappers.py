@@ -29,28 +29,39 @@ class JaxtariWrapper(object):
     
 class NoiseWrapper(JaxtariWrapper):
     """
-    Adds Gaussian noise and random detection dropping to object-centric observations.
+    Adds object-detector noise to object-centric observations: Gaussian jitter on the object
+    geometry and whole-object missed detections.
     Apply this wrapper between AtariWrapper and the observation wrappers
     (ObjectCentricWrapper, PixelObsWrapper, or PixelAndObjectCentricWrapper).
 
     Args:
         env: The environment to wrap (typically AtariWrapper).
-        detect_prob: Probability of keeping a detection leaf. At 1.0, no detections are dropped.
-                     At 0.0, all detections are always zeroed out.
-        std_dev: Standard deviation of Gaussian noise added to each element in the observation pytree.
-                 At 0.0, no noise is added.
+        detect_prob: Probability that an object instance is detected. Each instance is kept or
+                     missed with one draw per step; a missed instance has ALL of its fields
+                     (geometry, active, visual_id, state, ...) set to 0 together, so it reads
+                     exactly like an absent object. At 1.0, nothing is dropped.
+        std_dev: Standard deviation (in pixels) of the Gaussian noise added to the geometry
+                 fields x, y, width, height and orientation of every instance. All other fields
+                 (active, visual_id, state) stay exact. At 0.0, no noise is added.
 
-    The wrapper operates on the raw pytree observations (before flattening). Each leaf of the
-    pytree represents a semantic object. For each leaf (per step):
-        1. Add Gaussian noise N(0, std_dev) to each element.
-        2. With probability (1 - detect_prob), zero out the entire leaf (simulate missed detection).
+    The wrapper operates on the raw pytree observation (before flattening). Each
+    ``ObjectObservation`` node is one object group whose fields share a leading instance
+    dimension (e.g. 12 sharks). Per step and per instance:
+        1. Add N(0, std_dev) to x, y, width, height and orientation; width and height are
+           clipped at 0.
+        2. With probability (1 - detect_prob), zero out every field of the instance.
+    Leaves outside ``ObjectObservation`` nodes (e.g. score or lives counters) are not object
+    detections and pass through without noise or dropping. Noisy observations are float32.
 
     Example:
         base_env = jaxtari.make("Pong")
         env = AtariWrapper(base_env)
-        env = NoiseWrapper(env, detect_prob=0.95, std_dev=0.1)
+        env = NoiseWrapper(env, detect_prob=0.95, std_dev=0.5)
         env = ObjectCentricWrapper(env, frame_stack_size=4)
     """
+
+    JITTERED_FIELDS = ("x", "y", "width", "height", "orientation")
+    NON_NEGATIVE_FIELDS = ("width", "height")
 
     def __init__(self, env, detect_prob: float = 1.0, std_dev: float = 0.0):
         super().__init__(env)
@@ -65,33 +76,37 @@ class NoiseWrapper(JaxtariWrapper):
     @functools.partial(jax.jit, static_argnums=(0,))
     def _add_noise_to_obs(self, obs: chex.ArrayTree, key: chex.PRNGKey) -> chex.ArrayTree:
         """
-        Add Gaussian noise to each leaf of the observation pytree,
-        then randomly drop entire leaves.
+        Jitter the geometry of every object instance, then drop whole instances.
         """
-        treedef = jax.tree.structure(obs)
-        leaves = jax.tree.leaves(obs)
-        num_leaves = len(leaves)
+        from jaxtari.environment import ObjectObservation
 
-        # Split keys: two per leaf (one for noise, one for dropping)
-        all_keys = jax.random.split(key, num_leaves * 2 + 1)
-        noise_keys = all_keys[:num_leaves]
-        drop_keys = all_keys[num_leaves:num_leaves * 2]
+        is_object = lambda node: isinstance(node, ObjectObservation)
+        nodes, treedef = jax.tree.flatten(obs, is_leaf=is_object)
+        keys = jax.random.split(key, len(nodes))
 
-        def process_leaf(leaf, noise_k, drop_k):
-            leaf = leaf.astype(jnp.float32)
-            # 1. Add Gaussian noise
-            noise = jax.random.normal(noise_k, shape=leaf.shape) * self.std_dev
-            noisy_leaf = leaf + noise
-            # 2. Randomly drop (zero out) the entire leaf
-            keep = jax.random.bernoulli(drop_k, p=self.detect_prob)
-            result = jnp.where(keep, noisy_leaf, jnp.zeros_like(noisy_leaf))
-            return result.astype(leaf.dtype)
+        def process_object(obj, key):
+            drop_key, noise_key = jax.random.split(key)
+            instances = jnp.shape(obj.x)
+            # 1 draw per instance, shared by all of its fields
+            keep = jax.random.bernoulli(drop_key, p=self.detect_prob, shape=instances)
+            fields = {}
+            for index, name in enumerate(obj.__dataclass_fields__):
+                value = jnp.asarray(getattr(obj, name)).astype(jnp.float32)
+                if name in self.JITTERED_FIELDS:
+                    noise = jax.random.normal(
+                        jax.random.fold_in(noise_key, index), shape=value.shape)
+                    value = value + noise * self.std_dev
+                    if name in self.NON_NEGATIVE_FIELDS:
+                        value = jnp.maximum(value, 0.0)
+                keep_b = keep.reshape(keep.shape + (1,) * (value.ndim - keep.ndim)) \
+                    if value.ndim > keep.ndim else keep
+                fields[name] = jnp.where(keep_b, value, jnp.zeros_like(value))
+            return obj.replace(**fields)
 
-        noisy_leaves = [
-            process_leaf(leaf, nk, dk)
-            for leaf, nk, dk in zip(leaves, noise_keys, drop_keys)
-        ]
-        return jax.tree.unflatten(treedef, noisy_leaves)
+        noisy = [process_object(node, k) if is_object(node)
+                 else jnp.asarray(node).astype(jnp.float32)
+                 for node, k in zip(nodes, keys)]
+        return jax.tree.unflatten(treedef, noisy)
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey) -> Tuple[chex.ArrayTree, Any]:
