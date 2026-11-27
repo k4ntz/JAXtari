@@ -134,12 +134,7 @@ class NoiseWrapper(JaxtariWrapper):
         """
         if self.std_dev > 0.0 or self.detect_prob < 1.0:
             noise_key, inner_key = jax.random.split(state.key)
-            state_for_inner = AtariState(
-                env_state=state.env_state,
-                key=inner_key,
-                step=state.step,
-                prev_action=state.prev_action,
-            )
+            state_for_inner = state.replace(key=inner_key)
             obs, next_state, reward, terminated, truncated, info = self._env.step(
                 state_for_inner, action
             )
@@ -297,6 +292,8 @@ class AtariState:
     key: chex.PRNGKey
     step: int
     prev_action: int
+    # True after a life was lost (episodic_life and first_fire): the next step presses FIRE.
+    fire_pending: chex.Array = False
     
 class AtariWrapper(JaxtariWrapper):
     """
@@ -306,7 +303,8 @@ class AtariWrapper(JaxtariWrapper):
         env: The environment to wrap.
         sticky_actions: Sticky action probability in [0, 1]. Defaults to 0.25.
         episodic_life: Loss of life -> terminated. Does not reset the environment. Defaults to True.
-        first_fire: Take FIRE action on reset. Defaults to True.
+        first_fire: Take FIRE action on reset and, together with episodic_life, on the step after
+            a lost life (games such as Breakout wait for FIRE to serve again). Defaults to True.
         noop_max: Max number of no-op actions to take on reset. Defaults to 30.
         full_action_space: Use full action space of 18 actions. Defaults to False (minimal action set).
         max_frames_per_episode: Maximum number of frames per episode before truncation. Defaults to 108,000 (30 minutes at 60fps).
@@ -404,7 +402,8 @@ class AtariWrapper(JaxtariWrapper):
             step = step + 1
             prev_action = jnp.asarray(self.fire_action_index, dtype=jnp.int32)
 
-        return obs, AtariState(env_state, wrapper_key, step, prev_action)
+        return obs, AtariState(env_state, wrapper_key, step, prev_action,
+                               jnp.asarray(False))
 
     @functools.partial(jax.jit, static_argnums=(0,))
     def step(self, state: AtariState, action: int) -> Tuple[chex.Array, AtariState, float, bool, bool, Dict[Any, Any]]:
@@ -412,16 +411,23 @@ class AtariWrapper(JaxtariWrapper):
 
         use_sticky_action = jax.random.uniform(step_key, shape=()) < self.sticky_actions
         new_action = jnp.where(use_sticky_action, state.prev_action, action)
+        refire = self.episodic_life and self.first_fire  # static flags
+        if refire:
+            # FIRE after a lost life, like the FIRE on reset (not subject to sticky actions).
+            new_action = jnp.where(state.fire_pending, self.fire_action_index, new_action)
         obs, new_env_state, reward, env_done, infos = self._env.step(state.env_state, new_action)
 
         terminated = env_done
+        life_lost = jnp.asarray(False)
         if self.episodic_life:
             # If the player has lost a life, we consider the episode done
             if hasattr(state.env_state, "lives"):
-                condition = jnp.logical_and(state.env_state.lives > 0, new_env_state.lives < state.env_state.lives)
-                terminated = jnp.logical_or(terminated, condition)
+                life_lost = jnp.logical_and(state.env_state.lives > 0, new_env_state.lives < state.env_state.lives)
             elif hasattr(state.env_state, "lives_lost"):
-                terminated = jnp.logical_or(terminated, new_env_state.lives_lost > state.env_state.lives_lost)
+                life_lost = new_env_state.lives_lost > state.env_state.lives_lost
+            terminated = jnp.logical_or(terminated, life_lost)
+        fire_pending = jnp.logical_and(life_lost, jnp.logical_not(env_done)) if refire \
+            else jnp.asarray(False)
 
         if hasattr(infos, '_asdict'):
             # It's a namedtuple or similar, convert to dict
@@ -435,7 +441,8 @@ class AtariWrapper(JaxtariWrapper):
 
         info_dict = {k: v for k, v in info_items}
 
-        next_state = AtariState(new_env_state, next_state_key, state.step + 1, new_action)
+        next_state = AtariState(new_env_state, next_state_key, state.step + 1, new_action,
+                                fire_pending)
 
         # store actual done - not affected by episodic life
         info_dict["env_done"] = env_done
